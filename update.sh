@@ -1,5 +1,10 @@
 #!/opt/homebrew/bin/zsh
 
+echo 'Apps to update'
+brew outdated
+brew outdated --cask
+mas outdated
+
 echo 'Updating Applications...'
     brew upgrade
     brew update # Updating home-brew apps & formulas
