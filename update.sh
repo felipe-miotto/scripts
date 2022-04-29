@@ -18,3 +18,5 @@ echo 'Cleaning caches & directories...'
 
 echo ' '
 echo 'Updating Complete!'
+
+echo ' '
