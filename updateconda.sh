@@ -3,8 +3,8 @@
 echo 'Updating conda & mamba...'
 echo ' '
 
-conda update conda
-conda update mamba
+conda update conda --solver=classic
+conda update mamba --solver=classic
 
 echo ' '
 echo 'Updating complete!'
