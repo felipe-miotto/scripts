@@ -226,13 +226,16 @@ if command -v npm &>/dev/null; then
   ok "npm — done!"
 fi
 
-# ─── Conda / Mamba ────────────────────────────────────────────────────
+# ─── Conda ────────────────────────────────────────────────────────────
 if command -v conda &>/dev/null; then
-  section "Updating Conda & Mamba"
-  step "Updating conda..."
+  section "Updating Conda"
+  step "Updating conda (base environment)..."
   conda_before=$(conda --version 2>/dev/null | awk '{print $2}')
   conda_fails_before=${#FAILURES[@]}
-  run_retry "conda update" 3 conda update -y -n base conda
+  # --all updates the entire base env in one transaction. Updating only the
+  # `conda` package can silently freeze ("already installed") when companion
+  # packages (e.g. the ToS plugin) must move with it.
+  run_retry "conda update" 3 conda update -y -n base --all
   conda_after=$(conda --version 2>/dev/null | awk '{print $2}')
   # Only report status if the update step actually succeeded
   if (( ${#FAILURES[@]} == conda_fails_before )) && [[ -n "$conda_before" && -n "$conda_after" ]]; then
@@ -241,10 +244,6 @@ if command -v conda &>/dev/null; then
     else
       echo "  conda updated: $conda_before → $conda_after"
     fi
-  fi
-  if command -v mamba &>/dev/null; then
-    step "Updating mamba..."
-    run_retry "mamba update" 3 conda update -y -n base mamba
   fi
   echo ""
   ok "conda — done!"
