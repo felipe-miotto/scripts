@@ -25,7 +25,7 @@ for arg in "$@"; do
       cat <<'EOF'
 Usage: update_all.sh [options]
 
-Updates Homebrew, Mac App Store, macOS, npm globals, and AI dev tools.
+Updates Homebrew, Mac App Store, macOS, npm globals, conda, and AI dev tools.
 
 Options:
   --skip-brew   Skip Homebrew formula/cask and Mac App Store updates
@@ -45,6 +45,37 @@ run() {
   local label=$1; shift
   "$@" || fail "$label"
   return 0
+}
+# Like run(), but retries the command with backoff before giving up. Use for
+# network-dependent steps so a transient CDN/connection blip self-heals instead
+# of failing the whole run. Records a failure only if every attempt fails.
+run_retry() {
+  local label=$1 tries=$2; shift 2
+  # If we already know the network is down, don't grind through backoff waits —
+  # attempt once so a false "offline" reading can't skip a step that would work.
+  [[ ${OFFLINE:-false} == true ]] && tries=1
+  local n=1
+  while true; do
+    "$@" && return 0
+    if (( n >= tries )); then
+      fail "$label (after $tries attempts)"
+      return 0
+    fi
+    local wait=$(( n * 8 ))
+    echo "${YELLOW}${BOLD} ⚠${RESET} ${label} failed (attempt ${n}/${tries}) — retrying in ${wait}s..."
+    sleep $wait
+    (( n++ ))
+  done
+}
+# Lightweight reachability probe with short timeouts. Tries several reliable hosts
+# so one blocked/down endpoint doesn't yield a false "offline". Used only to skip
+# the retry-backoff grind when clearly offline — never to skip steps outright.
+check_connectivity() {
+  local host
+  for host in https://formulae.brew.sh https://github.com https://registry.npmjs.org; do
+    curl -fsS --max-time 4 -I "$host" >/dev/null 2>&1 && return 0
+  done
+  return 1
 }
 
 # Helpers
@@ -66,23 +97,39 @@ echo "${BOLD}${CYAN}│        S Y S T E M   U P D A T E R          │${RESET}"
 echo "${BOLD}${CYAN}└──────────────────────────────────────────────┘${RESET}"
 echo ""
 
+# Probe connectivity once up front. Every step here needs the network, so if we're
+# offline we attempt each step once (clear, fast failures) instead of retrying.
+OFFLINE=false
+if ! check_connectivity; then
+  OFFLINE=true
+  echo "${YELLOW}${BOLD} ⚠  No network connectivity detected${RESET} — steps will be attempted once and may fail. Re-run when back online."
+  echo ""
+fi
+
 # ─── Homebrew & Mac App Store ─────────────────────────────────────────
+# As of Homebrew ~4.6+/6.x, `brew upgrade` prompts "Do you want to proceed? [y/n]"
+# by default ("ask mode"). This script is meant to run unattended, so disable it.
+# (Equivalent to passing --yes/-y to every upgrade call.)
+export HOMEBREW_NO_ASK=1
+# Harden Homebrew's own downloads (incl. the formulae.brew.sh metadata index that
+# `brew update` fetches) against transient CDN/network failures. Default is 3.
+export HOMEBREW_CURL_RETRIES=5
 if [[ $SKIP_BREW == false ]]; then
   if command -v brew &>/dev/null; then
 
     section "Updating Applications"
     step "Fetching latest Homebrew formulas & taps..."
-    run "Homebrew update" brew update
+    run_retry "Homebrew update" 3 brew update
 
     step "Upgrading Homebrew formulas..."
-    run "Homebrew formula upgrade" brew upgrade
+    run_retry "Homebrew formula upgrade" 3 brew upgrade
 
     if [[ $GREEDY == true ]]; then
       step "Upgrading casks (including self-updating apps)..."
-      run "Cask upgrade (greedy)" brew upgrade --cask --greedy
+      run_retry "Cask upgrade (greedy)" 3 brew upgrade --cask --greedy
     else
       step "Upgrading Homebrew casks..."
-      run "Cask upgrade" brew upgrade --cask
+      run_retry "Cask upgrade" 3 brew upgrade --cask
     fi
 
     if command -v mas &>/dev/null; then
@@ -90,10 +137,13 @@ if [[ $SKIP_BREW == false ]]; then
       # macOS Tahoe (26) no longer indexes kMDItemAppStoreHasReceipt in Spotlight,
       # so mas thinks every App Store app is "unindexed" and re-warns on every run.
       # Disable mas's auto-index/warn behaviour (cosmetic only — upgrades still work).
-      run "Mac App Store upgrade" env MAS_NO_AUTO_INDEX=1 mas upgrade
+      run_retry "Mac App Store upgrade" 3 env MAS_NO_AUTO_INDEX=1 mas upgrade
     fi
 
     section "Cleaning Up"
+    step "Removing orphaned dependencies..."
+    run "Homebrew autoremove" brew autoremove
+
     step "Clearing Homebrew cache..."
     run "Homebrew cleanup" brew cleanup -s
 
@@ -163,11 +213,30 @@ ok "macOS — done!"
 if command -v npm &>/dev/null; then
   section "Updating npm Global Packages"
   step "Updating npm itself..."
-  run "npm self-update" npm install -g npm --silent
+  run_retry "npm self-update" 3 npm install -g npm --silent
   step "Updating global packages..."
-  run "npm global package update" npm update -g --silent
+  run_retry "npm global package update" 3 npm update -g --silent
+  # `npm update -g` never crosses major versions — surface anything held back
+  npm_outdated=$(npm outdated -g 2>/dev/null | tail -n +2)
+  if [[ -n "$npm_outdated" ]]; then
+    echo "${YELLOW}${BOLD} ⚠${RESET} Held back (major bump — update with: npm install -g <pkg>@latest):"
+    echo "$npm_outdated" | awk '{printf "   %s  %s → %s\n", $1, $2, $4}'
+  fi
   echo ""
   ok "npm — done!"
+fi
+
+# ─── Conda / Mamba ────────────────────────────────────────────────────
+if command -v conda &>/dev/null; then
+  section "Updating Conda & Mamba"
+  step "Updating conda..."
+  run_retry "conda update" 3 conda update -y conda --solver=classic
+  if command -v mamba &>/dev/null; then
+    step "Updating mamba..."
+    run_retry "mamba update" 3 conda update -y mamba --solver=classic
+  fi
+  echo ""
+  ok "conda — done!"
 fi
 
 # ─── AI Developer Tools ───────────────────────────────────────────────
@@ -184,7 +253,7 @@ fi
 if command -v npm &>/dev/null && npm list -g --depth=0 2>/dev/null | grep -q "@openai/codex"; then
   step "Updating Codex CLI..."
   codex_before=$(codex --version 2>/dev/null | awk '{print $2}')
-  npm install -g @openai/codex@latest --silent || fail "Codex CLI update"
+  run_retry "Codex CLI update" 3 npm install -g @openai/codex@latest --silent
   codex_after=$(codex --version 2>/dev/null | awk '{print $2}')
   if [[ "$codex_before" == "$codex_after" ]]; then
     echo "  Codex CLI is up to date ($codex_after)"
