@@ -230,7 +230,16 @@ fi
 if command -v conda &>/dev/null; then
   section "Updating Conda & Mamba"
   step "Updating conda..."
+  conda_before=$(conda --version 2>/dev/null | awk '{print $2}')
   run_retry "conda update" 3 conda update -y conda --solver=classic
+  conda_after=$(conda --version 2>/dev/null | awk '{print $2}')
+  if [[ -n "$conda_before" && -n "$conda_after" ]]; then
+    if [[ "$conda_before" == "$conda_after" ]]; then
+      echo "  conda itself is at $conda_after (dependencies refreshed; if conda warned a newer version exists, it's being held back — usually by an old Python in the base env)"
+    else
+      echo "  conda updated: $conda_before → $conda_after"
+    fi
+  fi
   if command -v mamba &>/dev/null; then
     step "Updating mamba..."
     run_retry "mamba update" 3 conda update -y mamba --solver=classic
@@ -240,14 +249,49 @@ if command -v conda &>/dev/null; then
 fi
 
 # ─── AI Developer Tools ───────────────────────────────────────────────
+# "What's new" helpers — best-effort release notes shown only when a tool's
+# version actually changed during this run. Any fetch/parse failure is silent.
+claude_whats_new() {
+  local from=$1 to=$2 notes
+  notes=$(curl -fsS --max-time 8 \
+    "https://raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md" 2>/dev/null \
+    | awk -v to="## ${to}" -v from="## ${from}" '
+        index($0, to) == 1 {p=1}
+        index($0, from) == 1 {exit}
+        p {print}
+      ' | head -40)
+  if [[ -n "$notes" ]]; then
+    echo "${CYAN}  What's new:${RESET}"
+    echo "$notes" | sed 's/^/    /'
+  fi
+}
+codex_whats_new() {
+  local ver=$1 tag body
+  for tag in "rust-v${ver}" "v${ver}"; do
+    body=$(curl -fsS --max-time 8 \
+      "https://api.github.com/repos/openai/codex/releases/tags/${tag}" 2>/dev/null \
+      | jq -r '.body // empty' 2>/dev/null | head -40)
+    [[ -n "$body" ]] && break
+  done
+  if [[ -n "$body" ]]; then
+    echo "${CYAN}  What's new:${RESET}"
+    echo "$body" | sed 's/^/    /'
+  fi
+}
+
 section "Updating AI Developer Tools"
 
 if command -v claude &>/dev/null; then
   step "Updating Claude Code..."
+  claude_before=$(claude --version 2>/dev/null | awk '{print $1}')
   claude update 2>&1 | grep -vE "^$" | while IFS= read -r line; do
     echo "  $line"
   done
   (( ${pipestatus[1]} != 0 )) && fail "Claude Code update"
+  claude_after=$(claude --version 2>/dev/null | awk '{print $1}')
+  if [[ -n "$claude_before" && -n "$claude_after" && "$claude_before" != "$claude_after" ]]; then
+    claude_whats_new "$claude_before" "$claude_after"
+  fi
 fi
 
 if command -v npm &>/dev/null && npm list -g --depth=0 2>/dev/null | grep -q "@openai/codex"; then
@@ -259,6 +303,7 @@ if command -v npm &>/dev/null && npm list -g --depth=0 2>/dev/null | grep -q "@o
     echo "  Codex CLI is up to date ($codex_after)"
   else
     echo "  Codex CLI updated: $codex_before → $codex_after"
+    codex_whats_new "$codex_after"
   fi
 fi
 
