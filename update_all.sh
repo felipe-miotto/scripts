@@ -231,11 +231,13 @@ if command -v conda &>/dev/null; then
   section "Updating Conda & Mamba"
   step "Updating conda..."
   conda_before=$(conda --version 2>/dev/null | awk '{print $2}')
+  conda_fails_before=${#FAILURES[@]}
   run_retry "conda update" 3 conda update -y -n base conda
   conda_after=$(conda --version 2>/dev/null | awk '{print $2}')
-  if [[ -n "$conda_before" && -n "$conda_after" ]]; then
+  # Only report status if the update step actually succeeded
+  if (( ${#FAILURES[@]} == conda_fails_before )) && [[ -n "$conda_before" && -n "$conda_after" ]]; then
     if [[ "$conda_before" == "$conda_after" ]]; then
-      echo "  conda itself is at $conda_after (dependencies refreshed; if conda warned a newer version exists, it's being held back — usually by an old Python in the base env)"
+      echo "  conda is up to date ($conda_after)"
     else
       echo "  conda updated: $conda_before → $conda_after"
     fi
