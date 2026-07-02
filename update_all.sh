@@ -231,7 +231,7 @@ if command -v conda &>/dev/null; then
   section "Updating Conda & Mamba"
   step "Updating conda..."
   conda_before=$(conda --version 2>/dev/null | awk '{print $2}')
-  run_retry "conda update" 3 conda update -y conda --solver=classic
+  run_retry "conda update" 3 conda update -y -n base conda
   conda_after=$(conda --version 2>/dev/null | awk '{print $2}')
   if [[ -n "$conda_before" && -n "$conda_after" ]]; then
     if [[ "$conda_before" == "$conda_after" ]]; then
@@ -242,7 +242,7 @@ if command -v conda &>/dev/null; then
   fi
   if command -v mamba &>/dev/null; then
     step "Updating mamba..."
-    run_retry "mamba update" 3 conda update -y mamba --solver=classic
+    run_retry "mamba update" 3 conda update -y -n base mamba
   fi
   echo ""
   ok "conda — done!"
