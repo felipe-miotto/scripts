@@ -137,7 +137,12 @@ if [[ $SKIP_BREW == false ]]; then
       # macOS Tahoe (26) no longer indexes kMDItemAppStoreHasReceipt in Spotlight,
       # so mas thinks every App Store app is "unindexed" and re-warns on every run.
       # Disable mas's auto-index/warn behaviour (cosmetic only — upgrades still work).
-      run_retry "Mac App Store upgrade" 3 env MAS_NO_AUTO_INDEX=1 mas upgrade
+      # If the fast check's run fails (e.g. Apple returns 503 mid-download), retry
+      # with --accurate: the fast check can lose track of an app whose download failed.
+      if ! env MAS_NO_AUTO_INDEX=1 mas upgrade; then
+        echo "${YELLOW}${BOLD} ⚠${RESET} Mac App Store upgrade failed — retrying with the accurate check..."
+        run_retry "Mac App Store upgrade" 2 env MAS_NO_AUTO_INDEX=1 mas upgrade --accurate
+      fi
     fi
 
     section "Cleaning Up"
