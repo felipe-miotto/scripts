@@ -232,10 +232,23 @@ if command -v conda &>/dev/null; then
   step "Updating conda (base environment)..."
   conda_before=$(conda --version 2>/dev/null | awk '{print $2}')
   conda_fails_before=${#FAILURES[@]}
-  # --all updates the entire base env in one transaction. Updating only the
-  # `conda` package can silently freeze ("already installed") when companion
-  # packages (e.g. the ToS plugin) must move with it.
-  run_retry "conda update" 3 conda update -y -n base --all
+  # Channels with unaccepted Terms of Service (e.g. Anaconda's `defaults`) make
+  # every conda command fail non-interactively — retrying can't fix that, so
+  # check up front and print the one-time manual fix instead.
+  tos_pending=$(conda tos --json 2>/dev/null \
+    | jq -r 'to_entries[] | select(.value != null and .value.tos_accepted != true) | .key' 2>/dev/null)
+  if [[ -n "$tos_pending" ]]; then
+    fail "conda update (Terms of Service not accepted)"
+    echo "   Accept once, then re-run:"
+    echo "$tos_pending" | while IFS= read -r ch; do
+      echo "     conda tos accept --override-channels --channel $ch"
+    done
+  else
+    # --all updates the entire base env in one transaction. Updating only the
+    # `conda` package can silently freeze ("already installed") when companion
+    # packages (e.g. the ToS plugin) must move with it.
+    run_retry "conda update" 3 conda update -y -n base --all
+  fi
   conda_after=$(conda --version 2>/dev/null | awk '{print $2}')
   # Only report status if the update step actually succeeded
   if (( ${#FAILURES[@]} == conda_fails_before )) && [[ -n "$conda_before" && -n "$conda_after" ]]; then
